@@ -41,6 +41,12 @@ auto thermoPropertiesEmpCpIntegration(Reaktoro_::Temperature TK, Reaktoro_::Pres
         return thermo_properties_PrTr;
     }
 
+    if (thermo_parameters.temperature_intervals.size() == 0)
+    {
+        errorModelParameters("Cp temperature intervals", substance.symbol() + " empirical Cp integration", __LINE__, __FILE__);
+        return thermo_properties_PrTr;
+    }
+
     // get Cp interval -> this has to go!!!!
     for (size_t i = 0; i < thermo_parameters.temperature_intervals.size(); i++)
     {
@@ -62,12 +68,27 @@ auto thermoPropertiesEmpCpIntegration(Reaktoro_::Temperature TK, Reaktoro_::Pres
     {
         if (TK_ <= thermo_parameters.temperature_intervals[0][0])
             k = 0;
-        if (TK_ > thermo_parameters.temperature_intervals[thermo_parameters.temperature_intervals.size() - 1][1])
+        // ">=", not ">": the in-interval test above uses a strict "<" on the upper bound, so a
+        // temperature exactly equal to the last interval's upper bound matches neither that test
+        // nor a strict ">" here, leaving k unset. That left k == -1, which was then used a few
+        // lines below to index Cp_coeff (and other vv<double> arrays) as an implicit size_t --
+        // an out-of-bounds read that crashed (SIGSEGV) for any substance whose swept temperature
+        // landed exactly on its Cp-interval upper bound (e.g. a single-interval substance ending
+        // at 683.15 K, hit by a 10 K sweep step landing exactly there).
+        if (TK_ >= thermo_parameters.temperature_intervals[thermo_parameters.temperature_intervals.size() - 1][1])
             k = thermo_parameters.temperature_intervals.size() - 1;
 
         thfun_logger->warn(" {} {}: The given temperature: {} is not inside the specified interval/s for the Cp calculation.\n"
                            "The temperature is not inside the specified interval for the substance {}.",
                            __FILE__, __LINE__, static_cast<double>(TK_), substance.symbol());
+
+        // Defensive fallback: with disjoint (non-contiguous) intervals, TK could fall in a gap
+        // that neither the "at/below first" nor "at/above last" clamp above covers, which would
+        // otherwise leave k == -1 and crash the same way when used as an index below. Clamp to
+        // the nearest defined interval instead of crashing.
+        if (k < 0)
+            k = (TK_ < thermo_parameters.temperature_intervals[0][0]) ? 0
+                : static_cast<int>(thermo_parameters.temperature_intervals.size()) - 1;
     }
 
     //k = 0; fix
