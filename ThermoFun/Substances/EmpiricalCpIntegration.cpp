@@ -3,6 +3,7 @@
 #include "ThermoProperties.h"
 #include "ThermoParameters.h"
 #include "Substance.h"
+#include <cmath>
 //#include <iomanip>
 
 namespace ThermoFun
@@ -47,6 +48,15 @@ auto thermoPropertiesEmpCpIntegration(Reaktoro_::Temperature TK, Reaktoro_::Pres
         return thermo_properties_PrTr;
     }
 
+    // A non-finite input temperature would compare false against every interval bound below
+    // (NaN comparisons are always false), leaving k unresolved even after the out-of-bounds
+    // fallback further down -- reject it up front instead of indexing with an unresolved k.
+    if (!std::isfinite(static_cast<double>(TK_)))
+    {
+        errorModelParameters("Cp temperature intervals", substance.symbol() + " empirical Cp integration", __LINE__, __FILE__);
+        return thermo_properties_PrTr;
+    }
+
     // Cp_coeff[k] and Cp_coeff[j] (0 <= j <= k) are indexed by interval below, so every interval
     // needs a matching coefficient entry. Every interval also needs a lower and an upper bound,
     // with lower < upper, since both are indexed unconditionally further down.
@@ -56,10 +66,17 @@ auto thermoPropertiesEmpCpIntegration(Reaktoro_::Temperature TK, Reaktoro_::Pres
         return thermo_properties_PrTr;
     }
 
+    // Intervals must be finite, non-empty (lower < upper), and non-overlapping/monotonic (each
+    // interval's lower bound at or after the previous interval's upper bound) -- otherwise a
+    // temperature in the overlap would be double-integrated by the j <= k loop further down.
+    // Gaps between intervals are still allowed.
     for (size_t i = 0; i < thermo_parameters.temperature_intervals.size(); i++)
     {
         if (thermo_parameters.temperature_intervals[i].size() < 2 ||
-            thermo_parameters.temperature_intervals[i][0] >= thermo_parameters.temperature_intervals[i][1])
+            !std::isfinite(thermo_parameters.temperature_intervals[i][0]) ||
+            !std::isfinite(thermo_parameters.temperature_intervals[i][1]) ||
+            thermo_parameters.temperature_intervals[i][0] >= thermo_parameters.temperature_intervals[i][1] ||
+            (i > 0 && thermo_parameters.temperature_intervals[i][0] < thermo_parameters.temperature_intervals[i - 1][1]))
         {
             errorModelParameters("Cp temperature intervals", substance.symbol() + " empirical Cp integration", __LINE__, __FILE__);
             return thermo_properties_PrTr;
@@ -121,6 +138,14 @@ auto thermoPropertiesEmpCpIntegration(Reaktoro_::Temperature TK, Reaktoro_::Pres
     }
 
     //k = 0; fix
+
+    // Defensive: with finite TK and validated, monotonic, non-overlapping intervals, the
+    // resolution above always assigns k. Guard anyway before indexing Cp_coeff/temperature_intervals.
+    if (k < 0)
+    {
+        errorModelParameters("Cp temperature intervals", substance.symbol() + " empirical Cp integration", __LINE__, __FILE__);
+        return thermo_properties_PrTr;
+    }
 
     for (unsigned i = 0; i < thermo_parameters.Cp_coeff[k].size(); i++)
     {
