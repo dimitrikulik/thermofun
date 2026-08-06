@@ -2,7 +2,6 @@ name: thermofun
 
 channels:
   - conda-forge
-  - defaults
 
 dependencies:
   - pip
