@@ -47,27 +47,49 @@ auto thermoPropertiesEmpCpIntegration(Reaktoro_::Temperature TK, Reaktoro_::Pres
         return thermo_properties_PrTr;
     }
 
-    // get Cp interval -> this has to go!!!!
+    // Cp_coeff[k] and Cp_coeff[j] (0 <= j <= k) are indexed by interval below, so every interval
+    // needs a matching coefficient entry. Every interval also needs a lower and an upper bound,
+    // with lower < upper, since both are indexed unconditionally further down.
+    if (thermo_parameters.Cp_coeff.size() < thermo_parameters.temperature_intervals.size())
+    {
+        errorModelParameters("Cp empirical coefficients", substance.symbol() + " empirical Cp integration", __LINE__, __FILE__);
+        return thermo_properties_PrTr;
+    }
+
     for (size_t i = 0; i < thermo_parameters.temperature_intervals.size(); i++)
     {
-        if (thermo_parameters.temperature_intervals[i].size() > 0)
+        if (thermo_parameters.temperature_intervals[i].size() < 2 ||
+            thermo_parameters.temperature_intervals[i][0] >= thermo_parameters.temperature_intervals[i][1])
         {
-            if ((thermo_parameters.temperature_intervals[i][0] <= TK) && (thermo_parameters.temperature_intervals[i][1] > TK))
-            {
-                k = i;
-                break;
-            }
-        }
-        else
-        {
-            k = 0;
+            errorModelParameters("Cp temperature intervals", substance.symbol() + " empirical Cp integration", __LINE__, __FILE__);
+            return thermo_properties_PrTr;
         }
     }
 
+    // get Cp interval
+    for (size_t i = 0; i < thermo_parameters.temperature_intervals.size(); i++)
+    {
+        if ((thermo_parameters.temperature_intervals[i][0] <= TK) && (thermo_parameters.temperature_intervals[i][1] > TK))
+        {
+            k = static_cast<int>(i);
+            break;
+        }
+    }
+
+    bool k_outside_bounds = false;
+
     if (k < 0)
     {
+        k_outside_bounds = true;
+
+        thfun_logger->warn(" {} {}: The given temperature: {} is not inside the specified interval/s for the Cp calculation.\n"
+                           "The temperature is not inside the specified interval for the substance {}.",
+                           __FILE__, __LINE__, static_cast<double>(TK_), substance.symbol());
+
         if (TK_ <= thermo_parameters.temperature_intervals[0][0])
+        {
             k = 0;
+        }
         // ">=", not ">": the in-interval test above uses a strict "<" on the upper bound, so a
         // temperature exactly equal to the last interval's upper bound matches neither that test
         // nor a strict ">" here, leaving k unset. That left k == -1, which was then used a few
@@ -75,20 +97,27 @@ auto thermoPropertiesEmpCpIntegration(Reaktoro_::Temperature TK, Reaktoro_::Pres
         // an out-of-bounds read that crashed (SIGSEGV) for any substance whose swept temperature
         // landed exactly on its Cp-interval upper bound (e.g. a single-interval substance ending
         // at 683.15 K, hit by a 10 K sweep step landing exactly there).
-        if (TK_ >= thermo_parameters.temperature_intervals[thermo_parameters.temperature_intervals.size() - 1][1])
-            k = thermo_parameters.temperature_intervals.size() - 1;
-
-        thfun_logger->warn(" {} {}: The given temperature: {} is not inside the specified interval/s for the Cp calculation.\n"
-                           "The temperature is not inside the specified interval for the substance {}.",
-                           __FILE__, __LINE__, static_cast<double>(TK_), substance.symbol());
-
-        // Defensive fallback: with disjoint (non-contiguous) intervals, TK could fall in a gap
-        // that neither the "at/below first" nor "at/above last" clamp above covers, which would
-        // otherwise leave k == -1 and crash the same way when used as an index below. Clamp to
-        // the nearest defined interval instead of crashing.
-        if (k < 0)
-            k = (TK_ < thermo_parameters.temperature_intervals[0][0]) ? 0
-                : static_cast<int>(thermo_parameters.temperature_intervals.size()) - 1;
+        else if (TK_ >= thermo_parameters.temperature_intervals[thermo_parameters.temperature_intervals.size() - 1][1])
+        {
+            k = static_cast<int>(thermo_parameters.temperature_intervals.size()) - 1;
+        }
+        else
+        {
+            // TK falls in a gap between two non-contiguous intervals (e.g. [0,100] and [200,300]
+            // with TK = 101): pick whichever neighboring interval's bound is numerically closer,
+            // instead of always clamping to the last interval regardless of which side TK is on.
+            for (size_t i = 0; i + 1 < thermo_parameters.temperature_intervals.size(); i++)
+            {
+                if (TK_ >= thermo_parameters.temperature_intervals[i][1] &&
+                    TK_ <= thermo_parameters.temperature_intervals[i + 1][0])
+                {
+                    double dist_lower = static_cast<double>(TK_) - thermo_parameters.temperature_intervals[i][1];
+                    double dist_upper = thermo_parameters.temperature_intervals[i + 1][0] - static_cast<double>(TK_);
+                    k = (dist_lower <= dist_upper) ? static_cast<int>(i) : static_cast<int>(i + 1);
+                    break;
+                }
+            }
+        }
     }
 
     //k = 0; fix
@@ -201,7 +230,7 @@ auto thermoPropertiesEmpCpIntegration(Reaktoro_::Temperature TK, Reaktoro_::Pres
     thermo_properties_PT.entropy = S;
     thermo_properties_PT.volume = V;
 
-    if (k < 0)
+    if (k_outside_bounds)
     {
         setMessage(Reaktoro_::Status::calculated, "Empirical Cp integration: Outside temperature bounds", thermo_properties_PT);
     }
