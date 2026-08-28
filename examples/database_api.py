@@ -1,3 +1,9 @@
+"""Example script demonstrating ThermoFun database API usage.
+
+This script shows how to access and manipulate elements, substances,
+and reactions in a ThermoFun database.
+"""
+
 import thermofun as thermofun
 
 database = thermofun.Database('test-database-thermofun.json')

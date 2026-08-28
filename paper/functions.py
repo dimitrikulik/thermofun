@@ -1,4 +1,6 @@
-import pandas as pd 
+"""Plotting functions for thermodynamic substance properties visualization."""
+
+import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -7,7 +9,18 @@ from collections import OrderedDict
 
 
 def plot_substances_properties_vs_temperature(results_csv_file, substances, lables, pressure=0, property=''):
+    """Plot substance properties vs temperature from CSV results.
 
+    Args:
+        results_csv_file: Path to CSV file containing substance property data
+        substances: List of substance symbols to plot
+        lables: Labels for the substances in the plot legend
+        pressure: Pressure value to filter data (default: 0 for all pressures)
+        property: Property name for y-axis label
+
+    Returns:
+        plt: Matplotlib pyplot object with the generated plot
+    """
     # plot settings
     mpl.rcParams['lines.linewidth']=2
     mpl.rcParams['axes.labelsize']=20
@@ -47,8 +60,17 @@ def plot_substances_properties_vs_temperature(results_csv_file, substances, labl
     return plt
 
 def plot_properties_vs_temperature(results_csv_file, substances, pressure=0):
+    """Plot multiple properties vs temperature for substances from CSV results.
 
-# plot settings
+    Args:
+        results_csv_file: Path to CSV file containing substance property data
+        substances: List of substance symbols to plot
+        pressure: Pressure value to filter data (default: 0 for all pressures)
+
+    Returns:
+        plt: Matplotlib pyplot object with the generated plot
+    """
+    # plot settings
     mpl.rcParams['lines.linewidth']=2
     mpl.rcParams['axes.labelsize']=20
     mpl.rcParams['axes.linewidth']=2
