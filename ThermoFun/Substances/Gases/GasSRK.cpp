@@ -12,7 +12,7 @@ auto thermoPropertiesGasSRK(Reaktoro_::Temperature TK, Reaktoro_::Pressure Pbar,
     if (Pbar.val == 0.0)
         Pbar += 1e-5;
     solmod::TSRKcalc mySRK( 1, (Pbar.val), (TK.val) );
-    double TClow = subst.thermoParameters().temperature_intervals[0][0];
+    double TClow = lowerTemperatureBound(subst, "SRK Soave-Redlich-Kwong fluid model");
     double * CPg = new double[7];
     for (unsigned int i = 0; i < 7; i++)
     {

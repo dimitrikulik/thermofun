@@ -17,7 +17,7 @@ auto thermoPropertiesGasSTP(Reaktoro_::Temperature TK, Reaktoro_::Pressure Pbar,
     if (subst.formula() == "H2O") Eos_Code = 'V';
 
     solmod::TSTPcalc mySTP( 1, Pbar.val, (TK.val), Eos_Code );  // modified 05.11.2010 (TW)
-    double TClow = subst.thermoParameters().temperature_intervals[0][0];
+    double TClow = lowerTemperatureBound(subst, "STP Sterner-Pitzer fluid model");
     double * CPg = new double[7];
     for (unsigned int i = 0; i < 7; i++)
     {
