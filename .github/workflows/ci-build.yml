@@ -55,10 +55,17 @@ jobs:
         run: |
           conda activate thermofun
           mkdir .build && cd .build
-          cmake -GNinja .. -DCMAKE_BUILD_TYPE=Release
+          cmake -GNinja .. -DCMAKE_BUILD_TYPE=Release -DTFUN_BUILD_TESTS=ON
           ninja
           ninja install
           python -c "import thermofun"
+
+      - name: Running C++ tests
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash -l {0}
+        run: |
+          conda activate thermofun
+          ctest --test-dir .build --output-on-failure
 
       - name: Running tests
         if: matrix.os == 'ubuntu-latest'

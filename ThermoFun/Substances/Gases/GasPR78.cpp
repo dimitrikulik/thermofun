@@ -12,7 +12,7 @@ auto thermoPropertiesGasPR78(Reaktoro_::Temperature TK, Reaktoro_::Pressure Pbar
     if (Pbar.val == 0.0)
         Pbar += 1e-5;
     solmod::TPR78calc myPR78( 1, (Pbar.val), (TK.val) );
-    double TClow = subst.thermoParameters().temperature_intervals[0][0];
+    double TClow = lowerTemperatureBound(subst, "PR78 Peng-Robinson fluid model");
     double * CPg = new double[7];
     for (unsigned int i = 0; i < 7; i++)
     {

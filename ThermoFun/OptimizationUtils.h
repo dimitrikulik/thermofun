@@ -22,6 +22,16 @@ struct MemoizedCall
     Ret value;
 };
 
+/// As MemoizedCall, plus this entry's position in the usage-order list, so that
+/// a cache hit can promote it to most-recently-used in constant time.
+template <typename Key, typename Ret>
+struct MemoizedCallLRU
+{
+    Key out_args;
+    Ret value;
+    typename std::list<Key>::iterator lru_pos;
+};
+
 /// Copy the post-call argument values in `stored` back into `args`, for those
 /// parameters f() is able to write through (non-const lvalue references);
 /// parameters taken by value are left untouched.
@@ -107,36 +117,48 @@ auto memoizeN(std::function<Ret(Args...)> f, size_t max_cache_size) -> std::func
 {
     // Key on the argument values, not on the references - see memoize() above.
     using Key = std::tuple<std::decay_t<Args>...>;
-    using Entry = detail::MemoizedCall<Key, Ret>;
+    using Entry = detail::MemoizedCallLRU<Key, Ret>;
 
+    // Both the cache and the usage order are shared, so that copies of the
+    // returned std::function go on operating as one cache, and so the iterators
+    // the entries hold into usage_order stay valid across those copies.
     auto cache = std::make_shared<std::map<Key, Entry>>();
-    std::list<Key> usage_order; // List to track the order of usage for LRU cache management
+    auto usage_order = std::make_shared<std::list<Key>>(); // front = most recently used
 
     return [=](Args... args) mutable -> Ret
     {
         Key t(args...); // Create a key from the argument values
 
-        // Check cache size and evict the least recently used item if necessary before adding
-        if (cache->size() >= max_cache_size) {
-            if (!usage_order.empty()) {
-                Key lru_t = usage_order.back(); // Get the least recently used key
-                usage_order.pop_back();                           // Remove from usage order
-                cache->erase(lru_t);                             // Remove from cache
-            }
-        }
-
-        // Check if result is already in cache
         auto it = cache->find(t);
-        if (it == cache->end()) { // t not found; compute the result
-            Ret value = f(args...); // may write through reference arguments
-            it = cache->emplace(t, Entry{Key(args...), std::move(value)}).first; // Cache the result
-            usage_order.push_front(std::move(t)); // Track the usage order
-        }
-        else // Replay whatever f() wrote through its reference arguments
+        if (it != cache->end())
+        {
+            // Cache hit. Promote to most recently used - without this the list
+            // is in insertion order rather than usage order, and eviction is
+            // not LRU at all.
+            usage_order->splice(usage_order->begin(), *usage_order, it->second.lru_pos);
+            // Replay whatever f() wrote through its reference arguments.
             detail::restoreOutArgs<Args...>(it->second.out_args,
                                             std::index_sequence_for<Args...>{}, args...);
+            return it->second.value;
+        }
 
-        return it->second.value; // Return the cached result
+        // Cache miss. Make room before inserting - evicting here rather than on
+        // every call, so that looking up the least recently used entry is a hit
+        // instead of evicting the very entry being asked for.
+        while (cache->size() >= max_cache_size && !usage_order->empty())
+        {
+            cache->erase(usage_order->back());
+            usage_order->pop_back();
+        }
+
+        Ret value = f(args...); // may write through reference arguments
+        Key out_args(args...);
+        auto pos = cache->emplace(t, Entry{std::move(out_args), std::move(value),
+                                           usage_order->end()}).first;
+        usage_order->push_front(std::move(t));
+        pos->second.lru_pos = usage_order->begin();
+
+        return pos->second.value;
     };
 }
 

@@ -15,7 +15,6 @@
 //   2. a cache hit still has to deliver the post-call value of P, even though
 //      the wrapped function does not run.
 
-#include <cassert>
 #include <cstdio>
 #include <string>
 #include <type_traits>
@@ -23,6 +22,31 @@
 #include "ThermoFun/OptimizationUtils.h"
 
 namespace {
+
+// Checks must survive NDEBUG. The project defaults to CMAKE_BUILD_TYPE Release,
+// whose default flags define NDEBUG and turn CHECK() into a no-op - which would
+// quietly reduce this whole file to a program that prints "passed" and exits 0.
+// So do not use CHECK() here.
+int failures = 0;
+
+void checkImpl(bool ok, const char* expr, int line)
+{
+    if (!ok)
+    {
+        ++failures;
+        printf("  FAIL line %d: %s\n", line, expr);
+    }
+}
+
+#define CHECK(cond) checkImpl((cond), #cond, __LINE__)
+
+/// Marks the start of a test; report() prints its outcome.
+int beginTest() { return failures; }
+void report(int before, const char* what, const char* which = "")
+{
+    printf("  [%s] %s%s%s\n", failures == before ? "ok" : "FAILED",
+           which, *which ? ": " : "", what);
+}
 
 // Mirrors ThermoPropertiesSubstanceFunction (ThermoEngine.cpp:49-50).
 struct Props { double gibbs_energy = 0.0; };
@@ -80,6 +104,7 @@ static_assert(std::is_same_v<Key, std::tuple<double, double, double, std::string
 template <typename Memoized>
 void testSurvivesCallerFrame(Memoized memo, const char* which)
 {
+    const int before = beginTest();
     calls = 0;
 
     // First call chain: P is a local of this block and dies with it.
@@ -88,7 +113,7 @@ void testSurvivesCallerFrame(Memoized memo, const char* which)
         memo(298.15, P, P, "H2O");
         memo(298.15, P, P, "Calcite");
     }
-    assert(calls == 2);
+    CHECK(calls == 2);
     clobberDeadFrame();
 
     // Second call chain, a fresh lvalue holding the same value: both must hit.
@@ -96,13 +121,13 @@ void testSurvivesCallerFrame(Memoized memo, const char* which)
     const Props h2o = memo(298.15, P, P, "H2O");
     const Props cal = memo(298.15, P, P, "Calcite");
 
-    assert(calls == 2 && "cache missed: keys did not compare equal across frames");
-    assert(h2o.gibbs_energy != cal.gibbs_energy &&
+    CHECK(calls == 2 && "cache missed: keys did not compare equal across frames");
+    CHECK(h2o.gibbs_energy != cal.gibbs_energy &&
            "distinct substances came back with identical properties");
-    assert(h2o.gibbs_energy == 298.15 * 1000.0 + 1e5 + 3.0);
-    assert(cal.gibbs_energy == 298.15 * 1000.0 + 1e5 + 7.0);
+    CHECK(h2o.gibbs_energy == 298.15 * 1000.0 + 1e5 + 3.0);
+    CHECK(cal.gibbs_energy == 298.15 * 1000.0 + 1e5 + 7.0);
 
-    printf("  [ok] %s: entries survive the calling frame\n", which);
+    report(before, "entries survive the calling frame", which);
 }
 
 // ---------------------------------------------------------------------------
@@ -115,52 +140,76 @@ void testSurvivesCallerFrame(Memoized memo, const char* which)
 template <typename Memoized>
 void testWritesBackOutArgument(Memoized memo, const char* which)
 {
+    const int before = beginTest();
     calls = 0;
     const double T = 298.15;
     const double expected = psat(T);
 
     double first = 0.0;
     const Props a = memo(T, first, first, "H2O");
-    assert(calls == 1);
-    assert(first == expected && "the wrapped function must still see the reference");
+    CHECK(calls == 1);
+    CHECK(first == expected && "the wrapped function must still see the reference");
 
     // Same call value (0.0), so this must be a hit - and must still yield Psat.
     double second = 0.0;
     const Props b = memo(T, second, second, "H2O");
-    assert(calls == 1 && "keyed on the post-call value of P instead of the call value");
-    assert(second == expected && "cache hit did not write the in-out P back");
-    assert(a.gibbs_energy == b.gibbs_energy);
+    CHECK(calls == 1 && "keyed on the post-call value of P instead of the call value");
+    CHECK(second == expected && "cache hit did not write the in-out P back");
+    CHECK(a.gibbs_energy == b.gibbs_energy);
 
     // An argument taken by value must not be disturbed by the write-back.
     double byValue = 1e5;
     double byRef = 0.0;
     memo(T, byValue, byRef, "H2O");
-    assert(byValue == 1e5 && "a by-value argument was overwritten");
+    CHECK(byValue == 1e5 && "a by-value argument was overwritten");
 
-    printf("  [ok] %s: cache hit writes the in-out P back\n", which);
+    report(before, "cache hit writes the in-out P back", which);
 }
 
 // ---------------------------------------------------------------------------
-// 4. memoizeN still evicts, and evicted entries recompute correctly.
+// 4. memoizeN evicts least-recently-used, and a lookup of the LRU entry is a
+//    hit rather than an eviction.
+//
+//    Eviction used to run on every call, before the lookup, so asking for the
+//    least recently used entry evicted it and recomputed it. Hits also never
+//    promoted, leaving usage_order in insertion order rather than usage order.
 // ---------------------------------------------------------------------------
 void testEviction()
 {
+    const int before = beginTest();
     calls = 0;
     auto memo = ThermoFun::memoizeN(PropsFn(compute), 2);
 
+    const double T = 298.15;
+    const auto expect = [&](const std::string& s) { return T * 1000.0 + 1e5 + double(s.size()); };
+
     double P = 1e5;
-    memo(298.15, P, P, "A");    // fills
-    memo(298.15, P, P, "BB");   // fills
-    assert(calls == 2);
+    memo(T, P, P, "A");     // fills
+    memo(T, P, P, "BB");    // fills
+    CHECK(calls == 2);
 
-    memo(298.15, P, P, "CCC");  // evicts the least recently used entry
-    assert(calls == 3);
+    memo(T, P, P, "CCC");   // full: evicts "A", the least recently used
+    CHECK(calls == 3);
 
-    // Whatever survived must still be correct rather than a stale neighbour.
-    const Props ccc = memo(298.15, P, P, "CCC");
-    assert(ccc.gibbs_energy == 298.15 * 1000.0 + 1e5 + 3.0);
+    // "BB" is now the least recently used cached entry. Asking for it must be a
+    // hit - this recomputed before eviction moved to the miss path.
+    const Props bb = memo(T, P, P, "BB");
+    CHECK(calls == 3);
+    CHECK(bb.gibbs_energy == expect("BB"));
 
-    printf("  [ok] memoizeN: eviction keeps surviving entries correct\n");
+    // That hit promoted "BB", so the next miss must evict "CCC", not "BB".
+    memo(T, P, P, "A");
+    CHECK(calls == 4);
+    CHECK(memo(T, P, P, "BB").gibbs_energy == expect("BB"));
+    CHECK(calls == 4 && "the promoted entry was evicted instead of the older one");
+
+    // "CCC" was the evicted one, so it recomputes - and comes back correct
+    // rather than as a stale neighbour.
+    const Props ccc = memo(T, P, P, "CCC");
+    CHECK(calls == 5);
+    CHECK(ccc.gibbs_energy == expect("CCC"));
+
+    report(before, "eviction and LRU promotion", "memoizeN");
 }
 
 } // namespace
@@ -177,6 +226,11 @@ int main()
 
     testEviction();
 
+    if (failures != 0)
+    {
+        printf("%d memoization check(s) FAILED\n", failures);
+        return 1;
+    }
     printf("all memoization tests passed\n");
     return 0;
 }

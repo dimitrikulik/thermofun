@@ -419,6 +419,24 @@ auto operator<<(std::ostream& stream, const ThermoParametersSubstance& data) -> 
     return stream;
 }
 
+auto lowerTemperatureBound(const Substance& subst, const std::string& model) -> double
+{
+    const auto& intervals = subst.thermoParameters().temperature_intervals;
+    if (!intervals.empty() && !intervals.front().empty())
+        return intervals.front().front();
+
+    // No cp_ft_equation method on this substance, so no T interval was ever recorded. Fall back
+    // to the substance's own reference temperature (Tst) rather than an arbitrary constant: the
+    // record's S298/CP298/etc (and so its whole standard-state description) are only actually
+    // valid AT that temperature, so it is the correct "no better information" choice - referenceT()
+    // already defaults to 298.15 K even when the source record left Tst unset.
+    double fallback = subst.referenceT();
+    thfun_logger->warn("{}: substance \"{}\" has no temperature intervals (they come only from a "
+                       "cp_ft_equation method); using its reference temperature {} K as the lower "
+                       "temperature bound.", model, subst.symbol(), fallback);
+    return fallback;
+}
+
 auto operator<<(std::ostream& stream, const Substance& subst) -> std::ostream&
 {
     stream << "Substance(\n";
