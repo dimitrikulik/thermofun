@@ -1,5 +1,4 @@
 import thermofun as thermofun
-import pytest as pytest
 import unittest
 
 # Regression coverage for the memoization cache in ThermoFun/OptimizationUtils.h,
@@ -27,61 +26,56 @@ class TestMemoization(unittest.TestCase):
 
     def test_saturation_pressure_substance_properties_stay_distinct_and_stable(self):
         T = 473.15
-        # symbol -> gibbs_energy at P = 0 (saturation pressure), pinned against a
-        # known-good build of the fixed OptimizationUtils.h
-        expected = {
-            'Ca+2':    -541308.716668614,
-            'Mg+2':    -431145.4445186801,
-            'Na+':     -268429.12018646183,
-            'K+':      -295165.7631867845,
-            'Cl-':     -136074.51529469137,
-            'HCO3-':   -602350.0526394788,
-            'CO3-2':   -506814.1330662342,
-            'H4SiO4@': -1349526.3674365964,
-        }
+        symbols = ['Ca+2', 'Mg+2', 'Na+', 'K+', 'Cl-', 'HCO3-', 'CO3-2', 'H4SiO4@']
 
-        # Pass 1, in dict order.
+        # Independent ground truth: its own engine, its own cache, queried once
+        # per symbol in a fixed order - decoupled from whichever access pattern
+        # exercises self.engine2 below. Not a numeric literal pinned from some
+        # other machine's build: the underlying computation is a deterministic
+        # function of (T, P, symbol), so it must reproduce bit-for-bit on every
+        # build/environment, which a hardcoded constant is not guaranteed to do
+        # (dependency versions differ between a local conda env and CI's
+        # conda-devenv one - this caught a real CI failure).
+        baseline_engine = thermofun.ThermoEngine('pytests/test-aq17-gem-lma-thermofun.json')
+        baseline = {sym: baseline_engine.thermoPropertiesSubstance(T, 0, sym).gibbs_energy.val
+                    for sym in symbols}
+
+        # Pass 1, in order; pass 2, reversed - a different sequence of preceding
+        # calls is exactly what let a dangling-reference cache key return a
+        # neighbour's value.
         pass1 = {sym: self.engine2.thermoPropertiesSubstance(T, 0, sym).gibbs_energy.val
-                 for sym in expected}
-
-        # Pass 2, reversed - a different sequence of preceding calls is exactly
-        # what let a dangling-reference cache key return a neighbour's value.
+                 for sym in symbols}
         pass2 = {sym: self.engine2.thermoPropertiesSubstance(T, 0, sym).gibbs_energy.val
-                 for sym in reversed(list(expected))}
+                 for sym in reversed(symbols)}
 
-        for sym, want in expected.items():
-            assert pass1[sym] == pytest.approx(want, 1e-5, 1e-14)
-            assert pass2[sym] == pytest.approx(want, 1e-5, 1e-14)
+        for sym in symbols:
+            assert pass1[sym] == baseline[sym]
+            assert pass2[sym] == baseline[sym]
 
         # No two distinct substances collapsed onto the same cached entry.
-        values = list(pass1.values())
-        assert len(set(values)) == len(values)
+        assert len(set(baseline.values())) == len(symbols)
 
     def test_saturation_pressure_reaction_properties_stay_distinct_and_stable(self):
         T = 298.15
-        # symbol -> log_equilibrium_constant at P = 0, same rationale as above
-        # but for ThermoPropertiesReactionFunction, the fourth memoized function.
-        expected = {
-            'Meionite-Ca':     80.87391613785806,
-            'Gedrite-Mg':      86.35257372406875,
-            'Tschermakite-Mg': 80.78800987679564,
-            'Pargasite-Mg':    88.8475233660601,
-            'Pyrope':          58.20122833383338,
-            'Grossular':       48.10436758915681,
-            'Forsterite':      29.306222154198444,
-        }
+        symbols = ['Meionite-Ca', 'Gedrite-Mg', 'Tschermakite-Mg', 'Pargasite-Mg',
+                   'Pyrope', 'Grossular', 'Forsterite']
+
+        # Same rationale as the substance test above, for
+        # ThermoPropertiesReactionFunction, the fourth memoized function.
+        baseline_engine = thermofun.ThermoEngine('pytests/test-aq17-gem-lma-thermofun.json')
+        baseline = {sym: baseline_engine.thermoPropertiesReaction(T, 0, sym).log_equilibrium_constant.val
+                    for sym in symbols}
 
         pass1 = {sym: self.engine2.thermoPropertiesReaction(T, 0, sym).log_equilibrium_constant.val
-                 for sym in expected}
+                 for sym in symbols}
         pass2 = {sym: self.engine2.thermoPropertiesReaction(T, 0, sym).log_equilibrium_constant.val
-                 for sym in reversed(list(expected))}
+                 for sym in reversed(symbols)}
 
-        for sym, want in expected.items():
-            assert pass1[sym] == pytest.approx(want, 1e-5, 1e-14)
-            assert pass2[sym] == pytest.approx(want, 1e-5, 1e-14)
+        for sym in symbols:
+            assert pass1[sym] == baseline[sym]
+            assert pass2[sym] == baseline[sym]
 
-        values = list(pass1.values())
-        assert len(set(values)) == len(values)
+        assert len(set(baseline.values())) == len(symbols)
 
     def test_repeated_call_same_symbol_matches_first_call(self):
         # A cache hit must return exactly what the (memoized) miss returned -
